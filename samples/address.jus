@@ -1,0 +1,12 @@
+type PostalCode string;
+type ZipCode number;
+
+schema Address {
+  postOfficeBox?: string;
+  extendedAddress?: string;
+  streetAddress?: string;
+  locality: !string;
+  region: string;
+  postalOrZipCode: PostalCode | ZipCode;
+  countryName: string;
+}
