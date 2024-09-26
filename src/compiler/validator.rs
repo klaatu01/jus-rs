@@ -1,9 +1,4 @@
-use std::collections::HashMap;
-
 use serde_json::Value;
-
-use crate::parser::{LiteralType, PrimitiveType, TypeExpr};
-
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Pointer(pub String);
 
@@ -14,7 +9,6 @@ pub enum TypeValidation {
     Boolean,
     Object,
     Array,
-    Null,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -43,18 +37,16 @@ impl Validation {
                 TypeValidation::Boolean => value.is_boolean(),
                 TypeValidation::Object => value.is_object(),
                 TypeValidation::Array => value.is_array(),
-                TypeValidation::Null => value.is_null(),
             },
-            Validation::Literal(l) => match l {
-                LiteralValidation::String(s) => {
-                    (value.is_string() && value.as_str().unwrap() == s)
-                        || panic!("Expected string literal {} got {}", s, value)
-                }
-                LiteralValidation::Number(s) => value.is_number() && value.to_string() == *s,
-                LiteralValidation::Boolean(b) => {
-                    value.is_boolean() && value.as_bool().unwrap() == *b
-                }
-            },
+            Validation::Literal(LiteralValidation::String(s)) => {
+                value.as_str().map_or(false, |v| v == s)
+            }
+            Validation::Literal(LiteralValidation::Number(s)) => {
+                value.as_str().map_or(false, |v| v == s)
+            }
+            Validation::Literal(LiteralValidation::Boolean(b)) => {
+                value.as_bool().map_or(false, |v| v == *b)
+            }
             Validation::And(a, b) => a.validate(value) && b.validate(value),
             Validation::Or(a, b) => a.validate(value) || b.validate(value),
         }

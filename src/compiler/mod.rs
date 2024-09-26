@@ -113,10 +113,6 @@ pub(crate) fn compile_type_expr_into_validator(
     }
 }
 
-struct CompiledSchema {
-    validators: Vec<Validator>,
-}
-
 pub fn compile_schema(
     schema: Schema,
     type_alias_validations: &HashMap<String, TypeExpr>,
@@ -127,7 +123,7 @@ pub fn compile_schema(
         let field_pointer = Pointer(format!("/{}", field.name));
         let validator = compile_type_expr_into_validator(
             &field.type_expr,
-            &field_pointer.0.as_str(),
+            field_pointer.0.as_str(),
             field.is_optional,
             type_alias_validations,
         );

@@ -33,14 +33,14 @@ mod tests {
 
     #[test]
     fn test_compile() {
-        let input = include_str!("../samples/simple.jus");
+        let input = include_str!("../data/schema/simple.jus");
         let result = Jus::compile(input);
         assert!(result.is_ok());
     }
 
     #[test]
     fn test_compile_and_validate() {
-        let input = include_str!("../samples/simple.jus");
+        let input = include_str!("../data/schema/simple.jus");
         let jus = Jus::compile(input).unwrap();
         let value = serde_json::json!({
             "hello": "Hello",
@@ -56,7 +56,7 @@ mod tests {
 
     #[test]
     fn test_compile_and_validate_fail() {
-        let input = include_str!("../samples/simple.jus");
+        let input = include_str!("../data/schema/simple.jus");
         let jus = Jus::compile(input).unwrap();
         let value = serde_json::json!({
             "hello": "Hello",
@@ -67,7 +67,7 @@ mod tests {
 
     #[test]
     fn test_compile_complex() {
-        let input = include_str!("../samples/complex.jus");
+        let input = include_str!("../data/schema/complex.jus");
         let result = Jus::compile(input);
         assert!(result.is_ok());
 

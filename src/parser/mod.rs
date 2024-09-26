@@ -467,7 +467,7 @@ mod tests {
 
     #[test]
     fn test_parse_simple_sample() {
-        let input = include_str!("../../samples/simple.jus");
+        let input = include_str!("../../data/schema/simple.jus");
         let result = parse_ast(input).unwrap();
         assert_eq!(
             result,
@@ -494,7 +494,7 @@ mod tests {
 
     #[test]
     fn test_parse_complex_sample() {
-        let input = include_str!("../../samples/address.jus");
+        let input = include_str!("../../data/schema/address.jus");
         let result = parse_ast(input).unwrap();
         assert_eq!(
             result,
@@ -560,7 +560,7 @@ mod tests {
 
     #[test]
     fn test_parse_nested_sample() {
-        let input = include_str!("../../samples/nested.jus");
+        let input = include_str!("../../data/schema/nested.jus");
         let result = parse_ast(input).unwrap();
         assert_eq!(
             result,
@@ -620,7 +620,7 @@ mod tests {
 
     #[test]
     fn parse_complex() {
-        let input = include_str!("../../samples/complex.jus");
+        let input = include_str!("../../data/schema/complex.jus");
         let result = parse_ast(input).unwrap();
         assert_eq!(
             result,
