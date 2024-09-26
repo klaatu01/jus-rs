@@ -1,19 +1,25 @@
 use nom::{
     branch::alt,
     bytes::complete::tag,
-    character::complete::{alpha1, multispace0},
+    character::complete::{alpha1, char, digit1, multispace0, one_of},
+    combinator::{opt, recognize},
+    sequence::tuple,
     IResult,
 };
 
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum LexicalError {
     #[error("Invalid token: {0}")]
     InvalidToken(String),
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(dead_code)]
 pub(crate) enum Token {
     Identifier(String),
+    StringLiteral(String),
+    BoolLiteral(String),
+    NumberLiteral(String),
     Colon,
     Optional,
     Union,
@@ -87,13 +93,52 @@ fn parse_identifier(input: &str) -> IResult<&str, Token> {
     Ok((input, Token::Identifier(identifier.to_string())))
 }
 
-fn skip_whitespace(input: &str) -> IResult<&str, &str> {
-    let (input, _) = multispace0(input)?;
-    Ok((input, input))
+fn parse_string_literal(input: &str) -> IResult<&str, Token> {
+    let (input, _) = tag("\"")(input)?;
+    let (input, string) = alpha1(input)?;
+    let (input, _) = tag("\"")(input)?;
+    Ok((input, Token::StringLiteral(string.to_string())))
 }
 
-fn skip_newline(input: &str) -> IResult<&str, &str> {
-    let (input, _) = tag("\n")(input)?;
+fn sign(input: &str) -> IResult<&str, char> {
+    one_of("+-")(input)
+}
+
+fn exponent(input: &str) -> IResult<&str, &str> {
+    recognize(tuple((one_of("eE"), opt(sign), digit1)))(input)
+}
+
+fn number(input: &str) -> IResult<&str, &str> {
+    recognize(tuple((
+        opt(sign),
+        alt((
+            // Match floats with digits before and after the decimal point
+            recognize(tuple((digit1, char('.'), digit1, opt(exponent)))),
+            // Match floats starting with a decimal point (e.g., .5)
+            recognize(tuple((char('.'), digit1, opt(exponent)))),
+            // Match floats ending with a decimal point (e.g., 2.)
+            recognize(tuple((digit1, char('.'), opt(exponent)))),
+            // Match integers with exponent
+            recognize(tuple((digit1, exponent))),
+            // Match integers
+            digit1,
+        )),
+    )))(input)
+}
+
+fn parse_number_literal(input: &str) -> IResult<&str, Token> {
+    let (input, number_str) = recognize(number)(input)?;
+    let number_value = number_str.parse::<f64>().unwrap();
+    Ok((input, Token::NumberLiteral(number_value.to_string())))
+}
+
+fn parse_bool_literal(input: &str) -> IResult<&str, Token> {
+    let (input, bool_literal) = alt((tag("true"), tag("false")))(input)?;
+    Ok((input, Token::BoolLiteral(bool_literal.to_string())))
+}
+
+fn skip_whitespace(input: &str) -> IResult<&str, &str> {
+    let (input, _) = multispace0(input)?;
     Ok((input, input))
 }
 
@@ -114,6 +159,9 @@ fn parse_token(input: &str) -> IResult<&str, Option<Token>> {
         parse_bracket_start,
         parse_bracket_end,
         parse_semi_colon,
+        parse_bool_literal,
+        parse_number_literal,
+        parse_string_literal,
         parse_identifier,
     ))(input)?;
     Ok((input, Some(token)))
@@ -228,6 +276,13 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_string_literal() {
+        let input = "\"string\"";
+        let result = parse_string_literal(input);
+        assert_eq!(result, Ok(("", Token::StringLiteral("string".to_string()))));
+    }
+
+    #[test]
     fn test_parse_token() {
         let input = "schema identifier: string;";
         let result = parse_token(input);
@@ -238,6 +293,13 @@ mod tests {
                 Some(Token::Identifier("schema".to_string()))
             ))
         );
+    }
+
+    #[test]
+    fn test_parse_number_literal() {
+        let input = "123";
+        let result = parse_number_literal(input);
+        assert_eq!(result, Ok(("", Token::NumberLiteral("123".to_string()))));
     }
 
     #[test]

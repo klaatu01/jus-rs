@@ -1,6 +1,6 @@
 pub mod lexer;
 
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum ParseError {
     #[error("Lexical error: {0}")]
     LexicalError(#[from] lexer::LexicalError),
@@ -19,6 +19,10 @@ pub enum ParseError {
     UnknownType(String),
     #[error("Expected type, found {0:?}")]
     ExpectedType(lexer::Token),
+    #[error("Multiple schema definitions found: {second:?} but already have {first:?}")]
+    MultipleSchemaDefinitions { first: String, second: String },
+    #[error("No schema found")]
+    NoSchemaFound,
 }
 
 #[derive(Debug, PartialEq)]
@@ -29,8 +33,18 @@ pub enum PrimitiveType {
 }
 
 #[derive(Debug, PartialEq)]
+pub enum LiteralType {
+    String(String),
+    Number(String),
+    Boolean(bool),
+}
+
+#[derive(Debug, PartialEq)]
 pub enum TypeExpr {
     Primitive(PrimitiveType),
+    Literal(LiteralType),
+    Object(Vec<Field>),
+    Array(Box<TypeExpr>),
     AliasReference(String),
     Nullable(Box<TypeExpr>),
     Union(Box<TypeExpr>, Box<TypeExpr>),
@@ -38,26 +52,26 @@ pub enum TypeExpr {
 
 #[derive(Debug, PartialEq)]
 pub struct Field {
-    name: String,
-    type_expr: TypeExpr,
-    is_optional: bool,
+    pub name: String,
+    pub type_expr: TypeExpr,
+    pub is_optional: bool,
 }
 
 #[derive(Debug, PartialEq)]
 pub struct TypeAlias {
-    name: String,
-    type_expr: TypeExpr,
+    pub name: String,
+    pub type_expr: TypeExpr,
 }
 
 #[derive(Debug, PartialEq)]
 pub struct Schema {
-    name: String,
-    fields: Vec<Field>,
+    pub name: String,
+    pub fields: Vec<Field>,
 }
 
 #[derive(Debug, PartialEq)]
-pub struct Jus {
-    pub schemas: Vec<Schema>,
+pub struct Ast {
+    pub schema: Schema,
     pub type_aliases: Vec<TypeAlias>,
 }
 
@@ -72,14 +86,14 @@ impl Parser {
     }
 
     pub fn expect_token(&mut self, expected: lexer::Token) -> Result<(), ParseError> {
-        if let Some(ref token) = self.current_token() {
-            if *token == &expected {
+        if let Some(token) = self.current_token() {
+            if token == &expected {
                 self.advance();
                 Ok(())
             } else {
                 Err(ParseError::UnexpectedToken {
                     expected,
-                    found: token.clone().clone(),
+                    found: token.clone(),
                 })
             }
         } else {
@@ -95,12 +109,8 @@ impl Parser {
         self.tokens.get(self.index)
     }
 
-    pub fn peek_token(&self) -> Option<&lexer::Token> {
-        self.tokens.get(self.index + 1)
-    }
-
     pub fn expect_keyword(&mut self, keyword: &str) -> Result<(), ParseError> {
-        if let Some(ref token) = self.current_token() {
+        if let Some(token) = self.current_token() {
             if let lexer::Token::Identifier(ident) = token {
                 match ident.as_str() {
                     word if word == keyword => {
@@ -109,13 +119,13 @@ impl Parser {
                     }
                     _ => Err(ParseError::ExpectedKeyword(
                         keyword.to_string(),
-                        token.clone().clone(),
+                        token.clone(),
                     )),
                 }
             } else {
                 Err(ParseError::ExpectedKeyword(
                     keyword.to_string(),
-                    token.clone().clone(),
+                    token.clone(),
                 ))
             }
         } else {
@@ -123,9 +133,18 @@ impl Parser {
         }
     }
 
+    pub fn try_parse_union_right(&mut self) -> Option<TypeExpr> {
+        if let Some(lexer::Token::Union) = self.current_token() {
+            self.advance();
+            self.parse_type_expression().ok()
+        } else {
+            None
+        }
+    }
+
     pub fn parse_type_expression(&mut self) -> Result<TypeExpr, ParseError> {
-        if let Some(ref token) = self.current_token() {
-            match token {
+        if let Some(token) = self.current_token() {
+            let left = match token {
                 lexer::Token::Identifier(ident) => {
                     let ident = ident.clone();
                     let type_expr = match ident.as_str() {
@@ -135,20 +154,50 @@ impl Parser {
                         _ => TypeExpr::AliasReference(ident),
                     };
                     self.advance();
-                    if let Some(lexer::Token::Union) = self.current_token() {
-                        self.advance();
-                        let right = self.parse_type_expression()?;
-                        Ok(TypeExpr::Union(Box::new(type_expr), Box::new(right)))
-                    } else {
-                        Ok(type_expr)
-                    }
+                    Ok(type_expr)
                 }
                 lexer::Token::Nullable => {
                     self.advance();
                     let inner = self.parse_type_expression()?;
                     Ok(TypeExpr::Nullable(Box::new(inner)))
                 }
-                _ => Err(ParseError::ExpectedType(token.clone().clone())),
+                lexer::Token::CurlyStart => {
+                    self.advance();
+                    let mut fields = Vec::new();
+                    while let Some(lexer::Token::Identifier(_)) = self.current_token() {
+                        let field = self.parse_field()?;
+                        fields.push(field);
+                    }
+                    self.expect_token(lexer::Token::CurlyEnd)?;
+                    Ok(TypeExpr::Object(fields))
+                }
+                lexer::Token::ArrayStart => {
+                    self.advance();
+                    let inner = self.parse_type_expression()?;
+                    self.expect_token(lexer::Token::ArrayEnd)?;
+                    Ok(TypeExpr::Array(Box::new(inner)))
+                }
+                lexer::Token::StringLiteral(s) => {
+                    let s = s.clone();
+                    self.advance();
+                    Ok(TypeExpr::Literal(LiteralType::String(s)))
+                }
+                lexer::Token::NumberLiteral(n) => {
+                    let n = n.clone();
+                    self.advance();
+                    Ok(TypeExpr::Literal(LiteralType::Number(n)))
+                }
+                lexer::Token::BoolLiteral(b) => {
+                    let b = b.clone();
+                    self.advance();
+                    Ok(TypeExpr::Literal(LiteralType::Boolean(b == "true")))
+                }
+                _ => Err(ParseError::ExpectedType(token.clone())),
+            }?;
+            if let Some(right) = self.try_parse_union_right() {
+                Ok(TypeExpr::Union(Box::new(left), Box::new(right)))
+            } else {
+                Ok(left)
             }
         } else {
             Err(ParseError::UnexpectedEOF)
@@ -156,13 +205,13 @@ impl Parser {
     }
 
     pub fn parse_identifier(&mut self) -> Result<String, ParseError> {
-        if let Some(ref token) = self.current_token() {
+        if let Some(token) = self.current_token() {
             if let lexer::Token::Identifier(ident) = token {
                 let ident = ident.clone();
                 self.advance();
                 Ok(ident)
             } else {
-                Err(ParseError::ExpectedIdentifier(token.clone().clone()))
+                Err(ParseError::ExpectedIdentifier(token.clone()))
             }
         } else {
             Err(ParseError::UnexpectedEOF)
@@ -220,16 +269,23 @@ impl Parser {
         })
     }
 
-    pub fn parse(&mut self) -> Result<Jus, ParseError> {
-        let mut schemas = Vec::new();
+    pub fn parse(&mut self) -> Result<Ast, ParseError> {
+        let mut schema: Option<Schema> = None;
         let mut type_aliases = Vec::new();
 
         while let Some(token) = self.current_token() {
             match token {
-                lexer::Token::Identifier(ref keyword) => match keyword.as_str() {
+                lexer::Token::Identifier(keyword) => match keyword.as_str() {
                     "schema" => {
-                        let schema = self.parse_schema()?;
-                        schemas.push(schema);
+                        let parsed_schema = self.parse_schema()?;
+                        if let Some(existing_schema) = schema {
+                            return Err(ParseError::MultipleSchemaDefinitions {
+                                first: existing_schema.name,
+                                second: parsed_schema.name,
+                            });
+                        } else {
+                            schema = Some(parsed_schema);
+                        }
                     }
                     "type" => {
                         let type_alias = self.parse_type_alias()?;
@@ -246,14 +302,18 @@ impl Parser {
             }
         }
 
-        Ok(Jus {
-            schemas,
-            type_aliases,
-        })
+        if let Some(schema) = schema {
+            Ok(Ast {
+                schema,
+                type_aliases,
+            })
+        } else {
+            Err(ParseError::NoSchemaFound)
+        }
     }
 }
 
-pub(crate) fn parse(input: &str) -> Result<Jus, ParseError> {
+pub(crate) fn parse_ast(input: &str) -> Result<Ast, ParseError> {
     let tokens = lexer::lex(input)?;
     let mut parser = Parser::new(tokens);
     parser.parse()
@@ -378,11 +438,11 @@ mod tests {
             type Name string;
             schema Person { name: Name; age: number; }
         "#;
-        let result = parse(input).unwrap();
+        let result = parse_ast(input).unwrap();
         assert_eq!(
             result,
-            Jus {
-                schemas: vec![Schema {
+            Ast {
+                schema: Schema {
                     name: "Person".to_string(),
                     fields: vec![
                         Field {
@@ -396,7 +456,7 @@ mod tests {
                             is_optional: false,
                         }
                     ]
-                }],
+                },
                 type_aliases: vec![TypeAlias {
                     name: "Name".to_string(),
                     type_expr: TypeExpr::Primitive(PrimitiveType::String),
@@ -408,11 +468,11 @@ mod tests {
     #[test]
     fn test_parse_simple_sample() {
         let input = include_str!("../../samples/simple.jus");
-        let result = parse(input).unwrap();
+        let result = parse_ast(input).unwrap();
         assert_eq!(
             result,
-            Jus {
-                schemas: vec![Schema {
+            Ast {
+                schema: Schema {
                     name: "HelloWorld".to_string(),
                     fields: vec![
                         Field {
@@ -426,7 +486,7 @@ mod tests {
                             is_optional: true,
                         }
                     ]
-                }],
+                },
                 type_aliases: vec![]
             }
         );
@@ -435,11 +495,11 @@ mod tests {
     #[test]
     fn test_parse_complex_sample() {
         let input = include_str!("../../samples/address.jus");
-        let result = parse(input).unwrap();
+        let result = parse_ast(input).unwrap();
         assert_eq!(
             result,
-            Jus {
-                schemas: vec![Schema {
+            Ast {
+                schema: Schema {
                     name: "Address".to_string(),
                     fields: vec![
                         Field {
@@ -483,7 +543,7 @@ mod tests {
                             is_optional: false,
                         }
                     ]
-                }],
+                },
                 type_aliases: vec![
                     TypeAlias {
                         name: "PostalCode".to_string(),
@@ -493,6 +553,237 @@ mod tests {
                         name: "ZipCode".to_string(),
                         type_expr: TypeExpr::Primitive(PrimitiveType::Number),
                     }
+                ]
+            }
+        );
+    }
+
+    #[test]
+    fn test_parse_nested_sample() {
+        let input = include_str!("../../samples/nested.jus");
+        let result = parse_ast(input).unwrap();
+        assert_eq!(
+            result,
+            Ast {
+                schema: Schema {
+                    name: "Nested".to_string(),
+                    fields: vec![
+                        Field {
+                            name: "obj".to_string(),
+                            type_expr: TypeExpr::Object(vec![Field {
+                                name: "hello".to_string(),
+                                type_expr: TypeExpr::Primitive(PrimitiveType::String),
+                                is_optional: false,
+                            }]),
+                            is_optional: false,
+                        },
+                        Field {
+                            name: "arr".to_string(),
+                            type_expr: TypeExpr::Array(Box::new(TypeExpr::Primitive(
+                                PrimitiveType::Number
+                            ))),
+                            is_optional: false,
+                        }
+                    ],
+                },
+                type_aliases: vec![]
+            }
+        );
+    }
+
+    #[test]
+    fn test_multiple_schemas_found_error() {
+        let input = r#"
+            schema Person { name: string; age: number; }
+            schema Details { address: string; }
+        "#;
+        let result = parse_ast(input);
+        assert!(result.is_err());
+        assert_eq!(
+            result.unwrap_err(),
+            ParseError::MultipleSchemaDefinitions {
+                first: "Person".to_string(),
+                second: "Details".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn no_schema_found_error() {
+        let input = r#"
+            type Name string;
+        "#;
+        let result = parse_ast(input);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), ParseError::NoSchemaFound);
+    }
+
+    #[test]
+    fn parse_complex() {
+        let input = include_str!("../../samples/complex.jus");
+        let result = parse_ast(input).unwrap();
+        assert_eq!(
+            result,
+            Ast {
+                schema: Schema {
+                    name: "UserProfile".to_string(),
+                    fields: vec![
+                        Field {
+                            name: "id".to_string(),
+                            type_expr: TypeExpr::AliasReference("UserID".to_string()),
+                            is_optional: false,
+                        },
+                        Field {
+                            name: "name".to_string(),
+                            type_expr: TypeExpr::Primitive(PrimitiveType::String),
+                            is_optional: false,
+                        },
+                        Field {
+                            name: "username".to_string(),
+                            type_expr: TypeExpr::Primitive(PrimitiveType::String),
+                            is_optional: false,
+                        },
+                        Field {
+                            name: "contactInfo".to_string(),
+                            type_expr: TypeExpr::AliasReference("ContactInfo".to_string()),
+                            is_optional: false,
+                        },
+                        Field {
+                            name: "friends".to_string(),
+                            type_expr: TypeExpr::Array(Box::new(TypeExpr::AliasReference(
+                                "UserID".to_string()
+                            ))),
+                            is_optional: true,
+                        },
+                        Field {
+                            name: "status".to_string(),
+                            type_expr: TypeExpr::Union(
+                                Box::new(TypeExpr::Literal(LiteralType::String(
+                                    "active".to_string()
+                                ))),
+                                Box::new(TypeExpr::Union(
+                                    Box::new(TypeExpr::Literal(LiteralType::String(
+                                        "inactive".to_string()
+                                    ))),
+                                    Box::new(TypeExpr::Literal(LiteralType::String(
+                                        "banned".to_string()
+                                    )))
+                                ))
+                            ),
+                            is_optional: true,
+                        },
+                        Field {
+                            name: "bio".to_string(),
+                            type_expr: TypeExpr::Nullable(Box::new(TypeExpr::Primitive(
+                                PrimitiveType::String
+                            ))),
+                            is_optional: true,
+                        },
+                        Field {
+                            name: "preferences".to_string(),
+                            type_expr: TypeExpr::Object(vec![
+                                Field {
+                                    name: "theme".to_string(),
+                                    type_expr: TypeExpr::Union(
+                                        Box::new(TypeExpr::Literal(LiteralType::String(
+                                            "light".to_string()
+                                        ))),
+                                        Box::new(TypeExpr::Union(
+                                            Box::new(TypeExpr::Literal(LiteralType::String(
+                                                "dark".to_string()
+                                            ))),
+                                            Box::new(TypeExpr::Literal(LiteralType::String(
+                                                "system".to_string()
+                                            )))
+                                        ))
+                                    ),
+                                    is_optional: false,
+                                },
+                                Field {
+                                    name: "notifications".to_string(),
+                                    type_expr: TypeExpr::Object(vec![
+                                        Field {
+                                            name: "email".to_string(),
+                                            type_expr: TypeExpr::Primitive(PrimitiveType::Boolean),
+                                            is_optional: false,
+                                        },
+                                        Field {
+                                            name: "sms".to_string(),
+                                            type_expr: TypeExpr::Primitive(PrimitiveType::Boolean),
+                                            is_optional: false,
+                                        },
+                                        Field {
+                                            name: "push".to_string(),
+                                            type_expr: TypeExpr::Primitive(PrimitiveType::Boolean),
+                                            is_optional: false,
+                                        }
+                                    ]),
+                                    is_optional: false,
+                                }
+                            ]),
+                            is_optional: true,
+                        }
+                    ]
+                },
+                type_aliases: vec![
+                    TypeAlias {
+                        name: "EmailAddress".to_string(),
+                        type_expr: TypeExpr::Primitive(PrimitiveType::String),
+                    },
+                    TypeAlias {
+                        name: "PhoneNumber".to_string(),
+                        type_expr: TypeExpr::Primitive(PrimitiveType::String),
+                    },
+                    TypeAlias {
+                        name: "SocialMediaHandle".to_string(),
+                        type_expr: TypeExpr::Primitive(PrimitiveType::String),
+                    },
+                    TypeAlias {
+                        name: "UserID".to_string(),
+                        type_expr: TypeExpr::Primitive(PrimitiveType::String),
+                    },
+                    TypeAlias {
+                        name: "ContactInfo".to_string(),
+                        type_expr: TypeExpr::Object(vec![
+                            Field {
+                                name: "email".to_string(),
+                                type_expr: TypeExpr::AliasReference("EmailAddress".to_string()),
+                                is_optional: false,
+                            },
+                            Field {
+                                name: "phone".to_string(),
+                                type_expr: TypeExpr::AliasReference("PhoneNumber".to_string()),
+                                is_optional: true,
+                            },
+                            Field {
+                                name: "socialMedia".to_string(),
+                                type_expr: TypeExpr::Object(vec![
+                                    Field {
+                                        name: "twitter".to_string(),
+                                        type_expr: TypeExpr::AliasReference(
+                                            "SocialMediaHandle".to_string()
+                                        ),
+                                        is_optional: true,
+                                    },
+                                    Field {
+                                        name: "linkedin".to_string(),
+                                        type_expr: TypeExpr::AliasReference(
+                                            "SocialMediaHandle".to_string()
+                                        ),
+                                        is_optional: true,
+                                    },
+                                    Field {
+                                        name: "github".to_string(),
+                                        type_expr: TypeExpr::AliasReference(
+                                            "SocialMediaHandle".to_string()
+                                        ),
+                                        is_optional: true,
+                                    }
+                                ]),
+                                is_optional: true,
+                            }
+                        ])
+                    },
                 ]
             }
         );
