@@ -1,0 +1,6 @@
+schema Nested {
+  obj: {
+    hello: string;
+  };
+  arr: [ number ];
+}

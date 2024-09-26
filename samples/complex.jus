@@ -1,0 +1,35 @@
+type EmailAddress string;
+
+type PhoneNumber string;
+
+type SocialMediaHandle string;
+
+type UserID string;
+
+type ContactInfo {
+  email: EmailAddress;
+  phone?: PhoneNumber;
+  socialMedia?: {
+    twitter?: SocialMediaHandle;
+    linkedin?: SocialMediaHandle;
+    github?: SocialMediaHandle;
+  };
+};
+
+schema UserProfile {
+  id: UserID;
+  name: string;
+  username: string;
+  contactInfo: ContactInfo;
+  friends?: [UserID];
+  status?: "active" | "inactive" | "banned";
+  bio?: !string;
+  preferences?: {
+    theme: "light" | "dark" | "system";
+    notifications: {
+      email: boolean;
+      sms: boolean;
+      push: boolean;
+    };
+  };
+}
