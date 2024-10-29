@@ -1,0 +1,7 @@
+type Hello string;
+type HelloAlias string;
+
+schema Test {
+  hello: Hello;
+  helloAlias: HelloAlias;
+}

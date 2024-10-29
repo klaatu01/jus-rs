@@ -1,6 +1,6 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 
-use crate::parser::{Ast, LiteralType, PrimitiveType, Schema, TypeAlias, TypeExpr};
+use crate::parser::{Ast, LiteralType, PrimitiveType, Schema, TypeExpr};
 
 use self::validator::{LiteralValidation, Pointer, TypeValidation, Validation, Validator};
 
@@ -26,7 +26,7 @@ pub(crate) fn compile_type_expr_into_validator(
     type_expr: &TypeExpr,
     pointer: &str,
     is_optional: bool,
-    type_aliases: &HashMap<String, TypeExpr>,
+    type_aliases: &HashMap<String, &TypeExpr>,
 ) -> Validator {
     match type_expr {
         TypeExpr::Primitive(primitive) => {
@@ -114,12 +114,12 @@ pub(crate) fn compile_type_expr_into_validator(
 }
 
 pub fn compile_schema(
-    schema: Schema,
-    type_alias_validations: &HashMap<String, TypeExpr>,
+    schema: &Schema,
+    type_alias_validations: &HashMap<String, &TypeExpr>,
 ) -> Vec<Validator> {
     let mut validators = Vec::new();
 
-    for field in schema.fields {
+    schema.fields.iter().for_each(|field| {
         let field_pointer = Pointer(format!("/{}", field.name));
         let validator = compile_type_expr_into_validator(
             &field.type_expr,
@@ -128,16 +128,16 @@ pub fn compile_schema(
             type_alias_validations,
         );
         validators.push(validator);
-    }
+    });
 
     validators
 }
 
-pub fn compile_ast(ast: Ast) -> Vec<Validator> {
-    let type_alias_validations: HashMap<String, TypeExpr> = ast
+pub fn compile_ast(ast: &Ast) -> Vec<Validator> {
+    let type_alias_validations: HashMap<String, &TypeExpr> = ast
         .type_aliases
-        .into_iter()
-        .map(|alias| (alias.name.clone(), alias.type_expr))
+        .iter()
+        .map(|alias| (alias.name.clone(), &alias.type_expr))
         .collect();
-    compile_schema(ast.schema, &type_alias_validations)
+    compile_schema(&ast.schema, &type_alias_validations)
 }

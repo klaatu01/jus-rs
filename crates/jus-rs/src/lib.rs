@@ -1,7 +1,9 @@
 use compiler::validator::Validator;
+use parser::Ast;
 
-mod compiler;
-mod parser;
+pub mod compiler;
+pub mod fmt;
+pub mod parser;
 
 #[derive(Debug, thiserror::Error)]
 pub enum JusError {
@@ -11,6 +13,7 @@ pub enum JusError {
 
 pub struct Jus {
     pub(crate) validators: Vec<Validator>,
+    pub(crate) ast: Ast,
 }
 
 impl Jus {
@@ -20,10 +23,18 @@ impl Jus {
             .all(|validator| validator.validate(value))
     }
 
-    pub fn compile(input: &str) -> Result<Jus, JusError> {
-        let ast = parser::parse_ast(input)?;
-        let validators = compiler::compile_ast(ast);
-        Ok(Jus { validators })
+    pub fn compile(input: &str) -> Result<Jus, Vec<JusError>> {
+        let ast = match parser::parse_ast(input) {
+            Err(errors) => return Err(errors.into_iter().map(JusError::ParseError).collect()),
+            Ok(ast) => ast,
+        };
+        let validators = compiler::compile_ast(&ast);
+        Ok(Jus { validators, ast })
+    }
+
+    pub fn decompile(&self) -> String {
+        let generator = fmt::Generator::new(self);
+        generator.generate()
     }
 }
 
@@ -101,5 +112,12 @@ mod tests {
             },
         });
         assert!(jus.validate(&value));
+    }
+
+    #[test]
+    fn test_compile_complex_fail() {
+        let input = include_str!("../data/schema/test.jus");
+        let result = Jus::compile(input);
+        assert!(result.is_err());
     }
 }

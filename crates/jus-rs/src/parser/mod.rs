@@ -1,45 +1,65 @@
+use self::lexer::{Token, TokenType};
+
 pub mod lexer;
 
-#[derive(Debug, thiserror::Error, PartialEq, Eq)]
-pub enum ParseError {
+#[derive(Debug, Clone, thiserror::Error, PartialEq, Eq)]
+pub enum ParseErrorKind {
     #[error("Lexical error: {0}")]
     LexicalError(#[from] lexer::LexicalError),
     #[error("Unexpected end of input")]
     UnexpectedEOF,
     #[error("Unexpected token: expected {expected:?}, found {found:?}")]
     UnexpectedToken {
-        expected: lexer::Token,
-        found: lexer::Token,
+        expected: lexer::TokenType,
+        found: lexer::TokenType,
     },
     #[error("Expected identifier, found {0:?}")]
-    ExpectedIdentifier(lexer::Token),
+    ExpectedIdentifier(lexer::TokenType),
     #[error("Expected keyword '{0}', found {1:?}")]
-    ExpectedKeyword(String, lexer::Token),
+    ExpectedKeyword(String, lexer::TokenType),
     #[error("Unknown type '{0}'")]
     UnknownType(String),
     #[error("Expected type, found {0:?}")]
-    ExpectedType(lexer::Token),
+    ExpectedType(lexer::TokenType),
     #[error("Multiple schema definitions found: {second:?} but already have {first:?}")]
     MultipleSchemaDefinitions { first: String, second: String },
     #[error("No schema found")]
     NoSchemaFound,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq, thiserror::Error)]
+pub struct ParseError {
+    pub kind: ParseErrorKind,
+    pub line: usize,
+    pub column: usize,
+    pub width: usize,
+}
+
+impl std::fmt::Display for ParseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(
+            f,
+            "Parse error: {} at line {} column {} width {}",
+            self.kind, self.line, self.column, self.width
+        )
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub enum PrimitiveType {
     String,
     Number,
     Boolean,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum LiteralType {
     String(String),
     Number(String),
     Boolean(bool),
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum TypeExpr {
     Primitive(PrimitiveType),
     Literal(LiteralType),
@@ -50,20 +70,20 @@ pub enum TypeExpr {
     Union(Box<TypeExpr>, Box<TypeExpr>),
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Field {
     pub name: String,
     pub type_expr: TypeExpr,
     pub is_optional: bool,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct TypeAlias {
     pub name: String,
     pub type_expr: TypeExpr,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Schema {
     pub name: String,
     pub fields: Vec<Field>,
@@ -75,29 +95,39 @@ pub struct Ast {
     pub type_aliases: Vec<TypeAlias>,
 }
 
-pub(crate) struct Parser {
-    tokens: Vec<lexer::Token>,
+pub(crate) struct Parser<'a> {
+    tokens: Vec<lexer::Token<'a>>,
     index: usize,
 }
 
-impl Parser {
-    pub(crate) fn new(tokens: Vec<lexer::Token>) -> Self {
+impl<'a> Parser<'a> {
+    pub(crate) fn new(tokens: Vec<lexer::Token<'a>>) -> Self {
         Self { tokens, index: 0 }
     }
 
-    pub fn expect_token(&mut self, expected: lexer::Token) -> Result<(), ParseError> {
+    pub fn expect_token(&mut self, expected: lexer::TokenType) -> Result<(), ParseError> {
         if let Some(token) = self.current_token() {
-            if token == &expected {
+            if token.token_type == expected {
                 self.advance();
                 Ok(())
             } else {
-                Err(ParseError::UnexpectedToken {
-                    expected,
-                    found: token.clone(),
+                Err(ParseError {
+                    kind: ParseErrorKind::UnexpectedToken {
+                        expected,
+                        found: token.token_type.clone(),
+                    },
+                    line: token.position.location_line() as usize,
+                    column: token.position.get_column(),
+                    width: token.width(),
                 })
             }
         } else {
-            Err(ParseError::UnexpectedEOF)
+            Err(ParseError {
+                kind: ParseErrorKind::UnexpectedEOF,
+                line: 1,
+                column: 1,
+                width: 1,
+            })
         }
     }
 
@@ -105,36 +135,55 @@ impl Parser {
         self.index += 1;
     }
 
-    pub fn current_token(&self) -> Option<&lexer::Token> {
-        self.tokens.get(self.index)
+    pub fn current_token(&self) -> Option<lexer::Token<'a>> {
+        self.tokens.get(self.index).cloned()
     }
 
     pub fn expect_keyword(&mut self, keyword: &str) -> Result<(), ParseError> {
         if let Some(token) = self.current_token() {
-            if let lexer::Token::Identifier(ident) = token {
+            if let lexer::TokenType::Identifier(ident) = &token.token_type {
                 match ident.as_str() {
                     word if word == keyword => {
                         self.advance();
                         Ok(())
                     }
-                    _ => Err(ParseError::ExpectedKeyword(
-                        keyword.to_string(),
-                        token.clone(),
-                    )),
+                    _ => Err(ParseError {
+                        kind: ParseErrorKind::ExpectedKeyword(
+                            keyword.to_string(),
+                            token.token_type.clone(),
+                        ),
+                        line: token.position.location_line() as usize,
+                        column: token.position.get_column(),
+                        width: token.width(),
+                    }),
                 }
             } else {
-                Err(ParseError::ExpectedKeyword(
-                    keyword.to_string(),
-                    token.clone(),
-                ))
+                Err(ParseError {
+                    kind: ParseErrorKind::ExpectedKeyword(
+                        keyword.to_string(),
+                        token.token_type.clone(),
+                    ),
+                    line: token.position.location_line() as usize,
+                    column: token.position.get_column(),
+                    width: token.width(),
+                })
             }
         } else {
-            Err(ParseError::UnexpectedEOF)
+            Err(ParseError {
+                kind: ParseErrorKind::UnexpectedEOF,
+                line: 1,
+                column: 1,
+                width: 1,
+            })
         }
     }
 
     pub fn try_parse_union_right(&mut self) -> Option<TypeExpr> {
-        if let Some(lexer::Token::Union) = self.current_token() {
+        if let Some(Token {
+            token_type: TokenType::Union,
+            ..
+        }) = self.current_token()
+        {
             self.advance();
             self.parse_type_expression().ok()
         } else {
@@ -144,8 +193,8 @@ impl Parser {
 
     pub fn parse_type_expression(&mut self) -> Result<TypeExpr, ParseError> {
         if let Some(token) = self.current_token() {
-            let left = match token {
-                lexer::Token::Identifier(ident) => {
+            let left = match token.token_type {
+                lexer::TokenType::Identifier(ident) => {
                     let ident = ident.clone();
                     let type_expr = match ident.as_str() {
                         "string" => TypeExpr::Primitive(PrimitiveType::String),
@@ -156,43 +205,52 @@ impl Parser {
                     self.advance();
                     Ok(type_expr)
                 }
-                lexer::Token::Nullable => {
+                lexer::TokenType::Nullable => {
                     self.advance();
                     let inner = self.parse_type_expression()?;
                     Ok(TypeExpr::Nullable(Box::new(inner)))
                 }
-                lexer::Token::CurlyStart => {
+                lexer::TokenType::CurlyStart => {
                     self.advance();
                     let mut fields = Vec::new();
-                    while let Some(lexer::Token::Identifier(_)) = self.current_token() {
+                    while let Some(Token {
+                        token_type: lexer::TokenType::Identifier(_),
+                        ..
+                    }) = self.current_token()
+                    {
                         let field = self.parse_field()?;
                         fields.push(field);
                     }
-                    self.expect_token(lexer::Token::CurlyEnd)?;
+                    self.expect_token(lexer::TokenType::CurlyEnd)?;
                     Ok(TypeExpr::Object(fields))
                 }
-                lexer::Token::ArrayStart => {
+                lexer::TokenType::ArrayStart => {
                     self.advance();
                     let inner = self.parse_type_expression()?;
-                    self.expect_token(lexer::Token::ArrayEnd)?;
+                    self.expect_token(lexer::TokenType::ArrayEnd)?;
                     Ok(TypeExpr::Array(Box::new(inner)))
                 }
-                lexer::Token::StringLiteral(s) => {
+                lexer::TokenType::StringLiteral(s) => {
                     let s = s.clone();
                     self.advance();
                     Ok(TypeExpr::Literal(LiteralType::String(s)))
                 }
-                lexer::Token::NumberLiteral(n) => {
+                lexer::TokenType::NumberLiteral(n) => {
                     let n = n.clone();
                     self.advance();
                     Ok(TypeExpr::Literal(LiteralType::Number(n)))
                 }
-                lexer::Token::BoolLiteral(b) => {
+                lexer::TokenType::BoolLiteral(b) => {
                     let b = b.clone();
                     self.advance();
                     Ok(TypeExpr::Literal(LiteralType::Boolean(b == "true")))
                 }
-                _ => Err(ParseError::ExpectedType(token.clone())),
+                _ => Err(ParseError {
+                    kind: ParseErrorKind::ExpectedType(token.token_type.clone()),
+                    line: token.position.location_line() as usize,
+                    column: token.position.get_column(),
+                    width: token.width(),
+                }),
             }?;
             if let Some(right) = self.try_parse_union_right() {
                 Ok(TypeExpr::Union(Box::new(left), Box::new(right)))
@@ -200,39 +258,58 @@ impl Parser {
                 Ok(left)
             }
         } else {
-            Err(ParseError::UnexpectedEOF)
+            Err(ParseError {
+                kind: ParseErrorKind::UnexpectedEOF,
+                line: 1,
+                column: 1,
+                width: 1,
+            })
         }
     }
 
     pub fn parse_identifier(&mut self) -> Result<String, ParseError> {
         if let Some(token) = self.current_token() {
-            if let lexer::Token::Identifier(ident) = token {
+            if let lexer::TokenType::Identifier(ident) = token.token_type {
                 let ident = ident.clone();
                 self.advance();
                 Ok(ident)
             } else {
-                Err(ParseError::ExpectedIdentifier(token.clone()))
+                Err(ParseError {
+                    kind: ParseErrorKind::ExpectedIdentifier(token.token_type.clone()),
+                    line: token.position.location_line() as usize,
+                    column: token.position.get_column(),
+                    width: token.width(),
+                })
             }
         } else {
-            Err(ParseError::UnexpectedEOF)
+            Err(ParseError {
+                kind: ParseErrorKind::UnexpectedEOF,
+                line: 1,
+                column: 1,
+                width: 1,
+            })
         }
     }
 
     pub fn parse_field(&mut self) -> Result<Field, ParseError> {
         let field_name = self.parse_identifier()?;
 
-        let is_optional = if let Some(lexer::Token::Optional) = self.current_token() {
+        let is_optional = if let Some(Token {
+            token_type: TokenType::Optional,
+            ..
+        }) = self.current_token()
+        {
             self.advance();
             true
         } else {
             false
         };
 
-        self.expect_token(lexer::Token::Colon)?;
+        self.expect_token(lexer::TokenType::Colon)?;
 
         let type_expr = self.parse_type_expression()?;
 
-        self.expect_token(lexer::Token::SemiColon)?;
+        self.expect_token(lexer::TokenType::SemiColon)?;
 
         Ok(Field {
             name: field_name,
@@ -245,7 +322,7 @@ impl Parser {
         self.expect_keyword("type")?;
         let alias_name = self.parse_identifier()?;
         let type_expr = self.parse_type_expression()?;
-        self.expect_token(lexer::Token::SemiColon)?;
+        self.expect_token(lexer::TokenType::SemiColon)?;
         Ok(TypeAlias {
             name: alias_name,
             type_expr,
@@ -255,68 +332,121 @@ impl Parser {
     pub fn parse_schema(&mut self) -> Result<Schema, ParseError> {
         self.expect_keyword("schema")?;
         let schema_name = self.parse_identifier()?;
-        self.expect_token(lexer::Token::CurlyStart)?;
+        self.expect_token(lexer::TokenType::CurlyStart)?;
 
         let mut fields = Vec::new();
-        while let Some(lexer::Token::Identifier(_)) = self.current_token() {
+        while let Some(Token {
+            token_type: lexer::TokenType::Identifier(_),
+            ..
+        }) = self.current_token()
+        {
             let field = self.parse_field()?;
             fields.push(field);
         }
-        self.expect_token(lexer::Token::CurlyEnd)?;
+        self.expect_token(lexer::TokenType::CurlyEnd)?;
         Ok(Schema {
             name: schema_name,
             fields,
         })
     }
 
-    pub fn parse(&mut self) -> Result<Ast, ParseError> {
+    pub fn parse(&mut self) -> Result<Ast, Vec<ParseError>> {
         let mut schema: Option<Schema> = None;
+        let mut errors = Vec::new();
         let mut type_aliases = Vec::new();
 
         while let Some(token) = self.current_token() {
-            match token {
-                lexer::Token::Identifier(keyword) => match keyword.as_str() {
+            match token.token_type {
+                lexer::TokenType::Identifier(ref keyword) => match keyword.as_str() {
                     "schema" => {
-                        let parsed_schema = self.parse_schema()?;
-                        if let Some(existing_schema) = schema {
-                            return Err(ParseError::MultipleSchemaDefinitions {
-                                first: existing_schema.name,
-                                second: parsed_schema.name,
-                            });
-                        } else {
-                            schema = Some(parsed_schema);
+                        match self.parse_schema() {
+                            Ok(parsed_schema) => {
+                                if let Some(ref existing_schema) = schema {
+                                    errors.push(ParseError {
+                                        kind: ParseErrorKind::MultipleSchemaDefinitions {
+                                            first: existing_schema.name.clone(),
+                                            second: parsed_schema.name,
+                                        },
+                                        line: token.position.location_line() as usize,
+                                        column: token.position.get_column(),
+                                        width: token.width(),
+                                    });
+                                } else {
+                                    schema = Some(parsed_schema);
+                                }
+                            }
+                            Err(e) => {
+                                errors.push(e);
+                                self.advance();
+                            }
+                        };
+                    }
+                    "type" => match self.parse_type_alias() {
+                        Ok(type_alias) => type_aliases.push(type_alias),
+                        Err(e) => {
+                            errors.push(e);
+                            self.advance();
                         }
+                    },
+                    _ => {
+                        errors.push(ParseError {
+                            kind: ParseErrorKind::UnknownType(keyword.clone()),
+                            line: token.position.location_line() as usize,
+                            column: token.position.get_column(),
+                            width: token.width(),
+                        });
+                        self.advance();
                     }
-                    "type" => {
-                        let type_alias = self.parse_type_alias()?;
-                        type_aliases.push(type_alias);
-                    }
-                    _ => return Err(ParseError::UnknownType(keyword.clone())),
                 },
                 _ => {
-                    return Err(ParseError::UnexpectedToken {
-                        expected: lexer::Token::Identifier("schema".to_string()),
-                        found: token.clone(),
-                    })
+                    self.advance();
                 }
             }
         }
 
-        if let Some(schema) = schema {
+        if !errors.is_empty() {
+            return Err(errors);
+        }
+
+        if schema.is_none() {
+            errors.push(ParseError {
+                kind: ParseErrorKind::NoSchemaFound,
+                line: 1,
+                column: 1,
+                width: 1,
+            });
+        }
+
+        if errors.is_empty() {
             Ok(Ast {
-                schema,
+                schema: schema.unwrap(),
                 type_aliases,
             })
         } else {
-            Err(ParseError::NoSchemaFound)
+            Err(errors)
         }
     }
 }
 
-pub(crate) fn parse_ast(input: &str) -> Result<Ast, ParseError> {
-    let tokens = lexer::lex(input)?;
-    let mut parser = Parser::new(tokens);
-    parser.parse()
+pub fn parse_ast(input: &str) -> Result<Ast, Vec<ParseError>> {
+    match lexer::lex(input) {
+        Ok(tokens) => {
+            let mut parser = Parser::new(tokens);
+            parser.parse()
+        }
+        Err(e) => Err(e
+            .into_iter()
+            .map(|e| {
+                let lexer::LexicalError::InvalidToken { column, line, .. } = e;
+                ParseError {
+                    kind: ParseErrorKind::LexicalError(e),
+                    line: line as usize,
+                    column,
+                    width: 1,
+                }
+            })
+            .collect()),
+    }
 }
 
 #[cfg(test)]
@@ -599,9 +729,12 @@ mod tests {
         "#;
         let result = parse_ast(input);
         assert!(result.is_err());
+        let result = result.unwrap_err();
+        assert_eq!(result.len(), 1);
+        let error = result[0].kind.clone();
         assert_eq!(
-            result.unwrap_err(),
-            ParseError::MultipleSchemaDefinitions {
+            error,
+            ParseErrorKind::MultipleSchemaDefinitions {
                 first: "Person".to_string(),
                 second: "Details".to_string()
             }
@@ -615,7 +748,10 @@ mod tests {
         "#;
         let result = parse_ast(input);
         assert!(result.is_err());
-        assert_eq!(result.unwrap_err(), ParseError::NoSchemaFound);
+        let result = result.unwrap_err();
+        assert_eq!(result.len(), 1);
+        let error = result[0].kind.clone();
+        assert_eq!(error, ParseErrorKind::NoSchemaFound);
     }
 
     #[test]
