@@ -10,7 +10,7 @@ JUS is a simplified version of JSON Schema. It is designed to be more human-read
 - [x] `enum` types through the `|` operator.
 - [x] `constants` by defining a field type with a string `"value"`, boolean `true` or `false`, or number `0`.
 - [x] Type Aliases through `type` keyword.
-- [] Type property validation using attribute tags `#()` eg. `#(min = 0, max = 10)`.
+- [ ] Type property validation using attribute tags `#()` eg. `#(min = 0, max = 10)`.
 
 ## JUS vs JSON Schema
 
