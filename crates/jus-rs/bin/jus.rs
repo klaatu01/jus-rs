@@ -28,14 +28,32 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     match cli.command {
         Commands::Fmt { input } => {
             let input_str = std::fs::read_to_string(input.clone())?;
-            let jus = Jus::compile(&input_str)?;
-            let output = jus.decompile();
-            std::fs::write(input, output)?;
+            let jus = Jus::compile(&input_str);
+            match jus {
+                Ok(jus) => {
+                    let output = jus.decompile();
+                    std::fs::write(input, output)?;
+                }
+                Err(errors) => {
+                    for error in errors {
+                        eprintln!("{}", error);
+                    }
+                }
+            }
         }
         Commands::Validate { schema, json } => {
             let schema_str = std::fs::read_to_string(schema)?;
             let json_str = std::fs::read_to_string(json)?;
-            let jus = Jus::compile(&schema_str)?;
+            let jus = Jus::compile(&schema_str);
+            let jus = match jus {
+                Ok(jus) => jus,
+                Err(errors) => {
+                    for error in errors {
+                        eprintln!("{}", error);
+                    }
+                    return Ok(());
+                }
+            };
             let json = serde_json::from_str(&json_str)?;
             if jus.validate(&json) {
                 println!("Valid");
